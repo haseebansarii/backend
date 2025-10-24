@@ -18,17 +18,39 @@ from contextlib import asynccontextmanager
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+# MongoDB connection with proper configuration
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+client = AsyncIOMotorClient(
+    mongo_url,
+    serverSelectionTimeoutMS=5000,  # 5 second timeout
+    connectTimeoutMS=5000,
+    socketTimeoutMS=5000,
+    maxPoolSize=10,
+    retryWrites=True,
+    retryReads=True
+)
+try:
+    db = client[os.environ.get('DB_NAME', 'digital_signage')]
+except Exception as e:
+    logger.error(f"Failed to connect to MongoDB: {str(e)}")
+    raise
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Nothing special to do
+    # Startup: Check MongoDB connection
+    try:
+        # Ping MongoDB to verify connection
+        await client.admin.command('ping')
+        logger.info("Successfully connected to MongoDB")
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {str(e)}")
+        raise
+    
     yield
+    
     # Shutdown: Close the MongoDB client
     client.close()
+    logger.info("Closed MongoDB connection")
 
 # Create the main app without a prefix
 app = FastAPI(lifespan=lifespan)
@@ -435,12 +457,3 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: Nothing special to do
-    yield
-    # Shutdown: Close the MongoDB client
-    client.close()
