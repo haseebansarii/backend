@@ -13,6 +13,8 @@ import feedparser
 import httpx
 
 
+from contextlib import asynccontextmanager
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -20,6 +22,13 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Nothing special to do
+    yield
+    # Shutdown: Close the MongoDB client
+    client.close()
 
 # Create the main app without a prefix
 app = FastAPI(lifespan=lifespan)
