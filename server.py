@@ -4,7 +4,6 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
-import asyncio
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -20,74 +19,38 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection with proper configuration
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(
+    mongo_url,
+    serverSelectionTimeoutMS=5000,  # 5 second timeout
+    connectTimeoutMS=5000,
+    socketTimeoutMS=5000,
+    maxPoolSize=10,
+    retryWrites=True,
+    retryReads=True
+)
 try:
-    # Get MongoDB connection details from environment
-    mongo_url = os.environ.get('MONGODB_URL') or os.environ.get('MONGO_URL')
-    if not mongo_url:
-        raise ValueError("MongoDB connection URL not found in environment variables")
-    
-    logger.info(f"Initializing MongoDB connection...")
-    
-    # Initialize MongoDB client with optimal settings for Railway
-    client = AsyncIOMotorClient(
-        mongo_url,
-        serverSelectionTimeoutMS=10000,    # 10 second timeout for server selection
-        connectTimeoutMS=20000,            # 20 second timeout for connection
-        socketTimeoutMS=30000,             # 30 second timeout for socket operations
-        maxPoolSize=50,                    # Increased pool size
-        minPoolSize=10,                    # Minimum connections to maintain
-        maxIdleTimeMS=60000,              # Maximum idle time for connections
-        waitQueueTimeoutMS=15000,         # How long to wait in the connection queue
-        retryWrites=True,
-        retryReads=True,
-        heartbeatFrequencyMS=10000        # How often to check server status
-    )
-    
-    # Get database name from environment or use default
-    db_name = os.environ.get('DB_NAME', 'digital_signage')
-    logger.info(f"Using database: {db_name}")
-    db = client[db_name]
-    
+    db = client[os.environ.get('DB_NAME', 'digital_signage')]
 except Exception as e:
-    logger.error(f"Failed to initialize MongoDB connection: {str(e)}")
+    logger.error(f"Failed to connect to MongoDB: {str(e)}")
     raise
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Check MongoDB connection
-    retry_count = 0
-    max_retries = 3
+    try:
+        # Ping MongoDB to verify connection
+        await client.admin.command('ping')
+        logger.info("Successfully connected to MongoDB")
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {str(e)}")
+        raise
     
-    while retry_count < max_retries:
-        try:
-            # Test MongoDB connection
-            logger.info(f"Attempting to connect to MongoDB (attempt {retry_count + 1}/{max_retries})...")
-            await client.admin.command('ping')
-            
-            # Get server info for logging
-            server_info = await client.admin.command('serverStatus')
-            logger.info(f"Successfully connected to MongoDB")
-            logger.info(f"MongoDB version: {server_info.get('version', 'unknown')}")
-            logger.info(f"Connections: {server_info.get('connections', {})}")
-            break
-            
-        except Exception as e:
-            retry_count += 1
-            logger.error(f"MongoDB connection attempt {retry_count} failed: {str(e)}")
-            if retry_count >= max_retries:
-                logger.error("Maximum retry attempts reached. Could not connect to MongoDB.")
-                raise
-            await asyncio.sleep(5)  # Wait 5 seconds before retrying
-    
-    logger.info("Application startup complete")
     yield
     
-    # Shutdown: Close MongoDB connection
-    try:
-        client.close()
-        logger.info("Closed MongoDB connection")
-    except Exception as e:
-        logger.error(f"Error while closing MongoDB connection: {str(e)}")
+    # Shutdown: Close the MongoDB client
+    client.close()
+    logger.info("Closed MongoDB connection")
 
 # Create the main app without a prefix
 app = FastAPI(lifespan=lifespan)
